@@ -1,0 +1,268 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: AWS API Gateway with a Lambda Integration
+
+Parameters:
+  
+  LambdaCodeBucket:
+     Description: 'Provide name of s3 bucket on which Lambda function resides.For Example lambda-cloud-sum-bucket.'
+     Type: String
+     
+  LambdaCodePath:
+     Description: 'Provide name of the zip file of code for the Lambda function.For example:dynamodbinsert.zip,dynamodbread.zip,dynamodbscan.zip'
+     Type: String
+     
+  DynamoReadCapacityUnits:
+     Description: 'Provisioned read throughput'
+     Type: Number
+     Default: '1'
+     MinValue: '1'
+     MaxValue: '10000'
+     ConstraintDescription: must be between 1 and 10000
+
+  DynamoWriteCapacityUnits:
+     Description: 'Provisioned write throughput'
+     Type: Number
+     Default: '1'
+     MinValue: '1'
+     MaxValue: '10000'
+     ConstraintDescription: must be between 1 and 10000
+     
+Resources:
+
+  ApiGatewayRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      ApiKeySourceType: HEADER
+      Description: An API Gateway with a Lambda Integration
+      EndpointConfiguration:
+        Types:
+          - EDGE
+      Name: lambda-api
+
+  ApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: 'lambda'
+      RestApiId: !Ref ApiGatewayRestApi
+      
+  ApiGatewayResourceScan:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: 'lambdascan'
+      RestApiId: !Ref ApiGatewayRestApi
+      
+  ApiGatewayResourceGet:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: 'lambdaget'
+      RestApiId: !Ref ApiGatewayRestApi      
+
+  ApiGateMethodPOST:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ApiKeyRequired: false
+      AuthorizationType: NONE
+      HttpMethod: POST
+      Integration:
+        ConnectionType: INTERNET
+        Credentials: !GetAtt ApiGatewayIamRole.Arn
+        IntegrationHttpMethod: POST
+        PassthroughBehavior: WHEN_NO_MATCH
+        TimeoutInMillis: 29000
+        Type: AWS_PROXY
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionForPost.Arn}/invocations'
+      OperationName: 'lambda'
+      ResourceId: !Ref ApiGatewayResource
+      RestApiId: !Ref ApiGatewayRestApi
+      
+  ApiGateMethodGET:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ApiKeyRequired: false
+      AuthorizationType: NONE
+      HttpMethod: POST
+      RequestParameters:
+        method.request.querystring.annid: true
+      Integration:
+        ConnectionType: INTERNET
+        Credentials: !GetAtt ApiGatewayIamRole.Arn
+        IntegrationHttpMethod: POST
+        PassthroughBehavior: WHEN_NO_MATCH
+        TimeoutInMillis: 29000
+        Type: AWS_PROXY
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionForGet.Arn}/invocations'
+        RequestParameters:
+          integration.request.querystring.annid: method.request.querystring.annid
+      OperationName: 'lambda'
+      ResourceId: !Ref ApiGatewayResourceGet
+      RestApiId: !Ref ApiGatewayRestApi
+      
+  ApiGateMethodSCAN:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ApiKeyRequired: false
+      AuthorizationType: NONE
+      HttpMethod: POST
+      Integration:
+        ConnectionType: INTERNET
+        Credentials: !GetAtt ApiGatewayIamRole.Arn
+        IntegrationHttpMethod: POST
+        PassthroughBehavior: WHEN_NO_MATCH
+        TimeoutInMillis: 29000
+        Type: AWS_PROXY
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionForScan.Arn}/invocations'
+      OperationName: 'lambda'
+      ResourceId: !Ref ApiGatewayResourceScan
+      RestApiId: !Ref ApiGatewayRestApi     
+
+  ApiGatewayModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      ContentType: 'application/json'
+      RestApiId: !Ref ApiGatewayRestApi
+      Schema: {}
+
+  ApiGatewayStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      DeploymentId: !Ref ApiGatewayDeployment
+      Description: Lambda API Stage v0
+      RestApiId: !Ref ApiGatewayRestApi
+      StageName: 'devstage'
+
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: 
+    - ApiGateMethodPOST
+    - ApiGateMethodGET
+    - ApiGateMethodSCAN
+    Properties:
+      Description: Lambda API Deployment
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiGatewayIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ''
+            Effect: 'Allow'
+            Principal:
+              Service:
+                - 'apigateway.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        - PolicyName: LambdaAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action: 'lambda:*'
+                Resource: 
+                - !GetAtt LambdaFunctionForPost.Arn
+                - !GetAtt LambdaFunctionForGet.Arn
+                - !GetAtt LambdaFunctionForScan.Arn
+
+  LambdaFunctionForPost:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Select [0, !Split [",", !Ref LambdaCodePath]]
+      Description: AWS Lambda function
+      FunctionName: 'lambda-function'
+      Handler: dynamodbinsert.lambda_handler
+      MemorySize: 256
+      Role: !GetAtt LambdaIamRole.Arn
+      Runtime: python3.7
+      Timeout: 60
+      
+  LambdaFunctionForGet:
+    Type: AWS::Lambda::Function
+    Properties:
+       Code: 
+         S3Bucket: !Ref LambdaCodeBucket
+         S3Key: !Select [1, !Split [",", !Ref LambdaCodePath]]
+       Description: AWS Lambda function
+       FunctionName: 'lambda-function2'
+       Handler: dynamodbread.lambda_handler
+       MemorySize: 256
+       Role: !GetAtt LambdaIamRole.Arn
+       Runtime: python3.7
+       Timeout: 60
+       
+  LambdaFunctionForScan:
+    Type: AWS::Lambda::Function
+    Properties:
+       Code: 
+         S3Bucket: !Ref LambdaCodeBucket
+         S3Key: !Select [2, !Split [",", !Ref LambdaCodePath]]
+       Description: AWS Lambda function
+       FunctionName: 'lambda-function3'
+       Handler: dynamodbscan.lambda_handler
+       MemorySize: 256
+       Role: !GetAtt LambdaIamRole.Arn
+       Runtime: python3.7
+       Timeout: 60       
+    
+  APIDynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+      - AttributeName: AnnounceId
+        AttributeType: S
+      - AttributeName: AnnounceDate
+        AttributeType: S
+      KeySchema:
+      - AttributeName: AnnounceId
+        KeyType: HASH
+      - AttributeName: AnnounceDate
+        KeyType: RANGE
+      ProvisionedThroughput:
+        ReadCapacityUnits:
+          Ref: DynamoReadCapacityUnits
+        WriteCapacityUnits:
+          Ref: DynamoWriteCapacityUnits
+      TableName: APIDynamoDBTable
+
+
+  LambdaIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service:
+                - 'lambda.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+      - PolicyName: DynamoAcess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - dynamodb:DeleteItem
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:UpdateItem
+            Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:434153905620:table/APIDynamoDBTable'
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: "*"
